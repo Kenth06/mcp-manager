@@ -1,0 +1,65 @@
+{
+  "$schema": "https://developers.cloudflare.com/workers/wrangler/configuration/",
+  "name": "mcp-manager",
+  "main": "src/index.ts",
+  "compatibility_date": "2024-12-01",
+  "compatibility_flags": ["nodejs_compat"],
+  
+  // D1 Database
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "mcp-registry",
+      "database_id": "38893e53-8543-4caa-bc55-fc2f7826d4d4"
+    }
+  ],
+  
+  // R2 Bucket para bundles
+  "r2_buckets": [
+    {
+      "binding": "BUNDLES",
+      "bucket_name": "mcp-bundles"
+    }
+  ],
+  
+  // KV Namespace para cache
+  // "kv_namespaces": [
+  //   {
+  //     "binding": "CACHE",
+  //     "id": "<KV_ID>"
+  //   }
+  // ],
+  
+  // Durable Objects
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "MCP_OPERATION",
+        "class_name": "McpOperationDO",
+        "script_name": "mcp-manager"
+      },
+      {
+        "name": "DEPLOYMENT_STATE",
+        "class_name": "DeploymentStateDO",
+        "script_name": "mcp-manager"
+      }
+    ]
+  },
+  
+  // Migrations
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_classes": ["McpOperationDO", "DeploymentStateDO"]
+    }
+  ],
+  
+  // Variables de entorno
+  "vars": {
+    "ENVIRONMENT": "development"
+  }
+  
+  // Secrets (configurar con: wrangler secret put CF_API_TOKEN)
+  // CF_API_TOKEN y CF_ACCOUNT_ID deben configurarse como secrets
+}
+

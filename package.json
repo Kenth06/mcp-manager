@@ -1,0 +1,28 @@
+{
+  "name": "mcp-control-plane",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Sistema de gestión centralizada para MCP Servers en Cloudflare Workers",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "deploy": "tsx scripts/deploy.ts",
+    "seed": "tsx scripts/seed-db.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "tsx": "^4.7.0",
+    "turbo": "^1.11.0",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "packageManager": "npm@10.0.0"
+}
+
