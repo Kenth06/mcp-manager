@@ -183,12 +183,15 @@ export class McpOperationDO extends DurableObject<Env> {
 
       this.addLog('info', 'Updating routing...');
 
+      // Generate the correct endpoint URL using the Cloudflare account
+      const endpointUrl = this.cloudflareApi.getWorkerEndpointUrl(workerName);
+
       this.addLog('info', 'Updating MCP server status in D1...');
       await this.env.DB.prepare(`
         UPDATE mcp_servers
         SET current_version = ?, worker_name = ?, endpoint_url = ?, updated_at = ?
         WHERE id = ?
-      `).bind(params.version, workerName, `https://${workerName}.yourdomain.workers.dev`, Date.now(), params.mcpId).run();
+      `).bind(params.version, workerName, endpointUrl, Date.now(), params.mcpId).run();
 
       await this.env.DB.prepare(`
         UPDATE mcp_versions

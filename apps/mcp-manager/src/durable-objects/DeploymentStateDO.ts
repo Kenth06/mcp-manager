@@ -55,6 +55,18 @@ export class DeploymentStateDO extends DurableObject<Env> {
       return this.handleStatus();
     }
 
+    if (pathname.endsWith('/log') && request.method === 'POST') {
+      return this.handleAddLog(request);
+    }
+
+    if (pathname.endsWith('/progress') && request.method === 'POST') {
+      return this.handleAddProgress(request);
+    }
+
+    if (pathname.endsWith('/update-status') && request.method === 'POST') {
+      return this.handleUpdateStatus(request);
+    }
+
     if (request.method === 'GET') {
       return this.handleStatus();
     }
@@ -95,7 +107,46 @@ export class DeploymentStateDO extends DurableObject<Env> {
     return Response.json(this.state);
   }
 
-  private handleSSE(request: Request): Response {
+  private async handleAddLog(request: Request): Promise<Response> {
+    try {
+      const body = await request.json<{ level: DeploymentLog['level']; message: string; data?: Record<string, unknown> }>();
+      this.addLog(body.level, body.message, body.data);
+      return Response.json({ success: true });
+    } catch (error) {
+      return Response.json(
+        { success: false, error: error instanceof Error ? error.message : 'Unknown error' },
+        { status: 400 }
+      );
+    }
+  }
+
+  private async handleAddProgress(request: Request): Promise<Response> {
+    try {
+      const body = await request.json<{ step: string; progress: number; message: string; data?: Record<string, unknown> }>();
+      this.addProgress(body.step, body.progress, body.message, body.data);
+      return Response.json({ success: true });
+    } catch (error) {
+      return Response.json(
+        { success: false, error: error instanceof Error ? error.message : 'Unknown error' },
+        { status: 400 }
+      );
+    }
+  }
+
+  private async handleUpdateStatus(request: Request): Promise<Response> {
+    try {
+      const body = await request.json<{ status: DeploymentState['status']; error?: string }>();
+      this.updateStatus(body.status, body.error);
+      return Response.json({ success: true });
+    } catch (error) {
+      return Response.json(
+        { success: false, error: error instanceof Error ? error.message : 'Unknown error' },
+        { status: 400 }
+      );
+    }
+  }
+
+  private handleSSE(_request: Request): Response {
     const currentState = this.state;
     const encoder = new TextEncoder();
 

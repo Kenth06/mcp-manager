@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
+import { BundleService } from '../services/bundle-service';
 
 type Bindings = {
   DB: D1Database;
@@ -89,9 +90,20 @@ toolsRoutes.patch('/:mcpId', zValidator('json', ToolsUpdateSchema), async (c: an
   configSnapshot.tools = body.tools;
 
   // Crear nueva versión con los tools actualizados
-  const newVersion = currentVersion?.version 
+  const newVersion = currentVersion?.version
     ? incrementVersion(currentVersion.version as string)
     : '1.0.0';
+
+  // Generate source code for the bundle
+  const sourceCode = JSON.stringify({
+    tools: body.tools,
+    bindings: configSnapshot.bindings || {},
+    version: newVersion,
+  }, null, 2);
+
+  // Create bundle in R2
+  const bundleService = new BundleService(c.env.BUNDLES, c.env.DB);
+  const bundle = await bundleService.createBundle(mcpId, newVersion, sourceCode);
 
   const versionId = crypto.randomUUID();
   await c.env.DB.prepare(`
@@ -101,7 +113,7 @@ toolsRoutes.patch('/:mcpId', zValidator('json', ToolsUpdateSchema), async (c: an
     versionId,
     mcpId,
     newVersion,
-    '', // bundle_key se actualizará cuando se publique
+    bundle.key,
     JSON.stringify(configSnapshot),
     Date.now()
   ).run();
@@ -111,6 +123,8 @@ toolsRoutes.patch('/:mcpId', zValidator('json', ToolsUpdateSchema), async (c: an
     version: newVersion,
     versionId,
     tools: body.tools,
+    bundleKey: bundle.key,
+    bundleSize: bundle.size,
   });
 });
 
@@ -119,5 +133,6 @@ function incrementVersion(version: string): string {
   parts[2] = (parts[2] || 0) + 1;
   return parts.join('.');
 }
+
 
 

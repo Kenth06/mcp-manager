@@ -14,7 +14,7 @@ interface BundleMetadata {
 export class BundleService {
   constructor(
     private r2: R2Bucket,
-    private db: D1Database,
+    _db: D1Database,
   ) {}
 
   async createBundle(

@@ -3,7 +3,7 @@
 import React from 'react';
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
-import { Home, Server, Plus, Settings } from 'lucide-react';
+import { Home, Server, Plus, Rocket } from 'lucide-react';
 import { Button } from '@/components/ui';
 
 export function AppHeader() {
@@ -12,6 +12,7 @@ export function AppHeader() {
   const navItems = [
     { href: '/', label: 'Home', icon: Home },
     { href: '/mcp', label: 'MCP Servers', icon: Server },
+    { href: '/deployments', label: 'Deployments', icon: Rocket },
   ];
 
   const isActive = (href: string) => {
@@ -60,5 +61,6 @@ export function AppHeader() {
     </header>
   );
 }
+
 
 

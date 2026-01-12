@@ -6,6 +6,8 @@ export interface BadgeProps {
   variant?: "default" | "secondary" | "success" | "warning" | "error" | "info" | "outline";
   icon?: React.ReactNode;
   className?: string;
+  style?: React.CSSProperties;
+  onClick?: () => void;
 }
 
 export function Badge({
@@ -13,6 +15,8 @@ export function Badge({
   variant = "default",
   icon,
   className,
+  style,
+  onClick,
 }: BadgeProps) {
   const variantClasses = {
     default: "bg-gray-100 text-gray-700",
@@ -26,7 +30,10 @@ export function Badge({
 
   return (
     <span
-      className={cn("inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium", variantClasses[variant], className)}
+      className={cn("inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium", variantClasses[variant], onClick && "cursor-pointer", className)}
+      style={style}
+      onClick={onClick}
+      role={onClick ? "button" : undefined}
     >
       {icon && (
         <span className="inline-flex items-center justify-center flex-shrink-0">
@@ -37,5 +44,8 @@ export function Badge({
     </span>
   );
 }
+
+
+
 
 

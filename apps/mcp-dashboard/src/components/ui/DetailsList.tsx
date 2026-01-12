@@ -98,3 +98,6 @@ export function DetailsList({ title, items, className }: DetailsListProps) {
 }
 
 
+
+
+

@@ -2,6 +2,9 @@ import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { VersionCreateSchema } from '../schemas/mcp.schema';
 import { BundleService } from '../services/bundle-service';
+import { RollbackService } from '../services/rollback-service';
+import { CloudflareApiService } from '../services/cloudflare-api';
+import { WorkerGenerator } from '../services/worker-generator';
 
 type Bindings = {
   DB: D1Database;
@@ -68,7 +71,7 @@ versionRoutes.post('/:mcpId', zValidator('json', VersionCreateSchema), async (c:
 });
 
 // Publicar versión (deploy a Cloudflare)
-versionRoutes.post('/:mcpId/versions/:version/publish', async (c: any) => {
+versionRoutes.post('/:mcpId/:version/publish', async (c: any) => {
   const mcpId = c.req.param('mcpId');
   const version = c.req.param('version');
 
@@ -144,5 +147,51 @@ versionRoutes.get('/:mcpId', async (c: any) => {
   `).bind(mcpId).all();
 
   return c.json({ versions: results });
+});
+
+// Rollback to a specific version
+versionRoutes.post('/:mcpId/:version/rollback', async (c: any) => {
+  const mcpId = c.req.param('mcpId');
+  const version = c.req.param('version');
+
+  try {
+    // Verify the version exists
+    const versionRecord = await c.env.DB.prepare(`
+      SELECT * FROM mcp_versions WHERE mcp_id = ? AND version = ?
+    `).bind(mcpId, version).first();
+
+    if (!versionRecord) {
+      return c.json({ error: 'Version not found' }, 404);
+    }
+
+    // Check if this version is already active
+    if (versionRecord.is_active) {
+      return c.json({ error: 'This version is already active' }, 400);
+    }
+
+    // Initialize services
+    const cloudflareApi = new CloudflareApiService(c.env.CF_API_TOKEN, c.env.CF_ACCOUNT_ID);
+    const workerGenerator = new WorkerGenerator();
+    const rollbackService = new RollbackService(
+      c.env.DB,
+      cloudflareApi,
+      workerGenerator,
+      c.env.BUNDLES
+    );
+
+    // Perform rollback
+    await rollbackService.rollback(mcpId, version);
+
+    return c.json({
+      success: true,
+      message: `Successfully rolled back to version ${version}`,
+      version,
+    });
+  } catch (error) {
+    console.error('Rollback failed:', error);
+    return c.json({
+      error: error instanceof Error ? error.message : 'Rollback failed',
+    }, 500);
+  }
 });
 

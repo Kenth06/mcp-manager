@@ -170,3 +170,6 @@ const ${tool.name}Schema = z.object(${JSON.stringify(tool.inputSchema)});
 }
 
 
+
+
+

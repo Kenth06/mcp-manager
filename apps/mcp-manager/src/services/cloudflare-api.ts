@@ -5,16 +5,35 @@ interface Bindings {
   secrets?: string[];
 }
 
-interface DeployWorkerOptions {
-  bindings?: Bindings;
-  vars?: Record<string, string>;
+// Binding configuration with actual Cloudflare resource IDs
+export interface BindingConfig {
+  d1?: Record<string, string>;  // binding_name -> database_id
+  kv?: Record<string, string>;  // binding_name -> namespace_id
+  r2?: Record<string, string>;  // binding_name -> bucket_name
 }
 
 export class CloudflareApiService {
+  private bindingConfig: BindingConfig = {};
+
   constructor(
     private apiToken: string,
     private accountId: string,
   ) {}
+
+  // Set binding configuration (maps binding names to actual resource IDs)
+  setBindingConfig(config: BindingConfig): void {
+    this.bindingConfig = config;
+  }
+
+  // Get the workers.dev subdomain for this account
+  getWorkersSubdomain(): string {
+    return `${this.accountId}.workers.dev`;
+  }
+
+  // Generate the endpoint URL for a deployed worker
+  getWorkerEndpointUrl(workerName: string): string {
+    return `https://${workerName}.${this.accountId}.workers.dev`;
+  }
 
   async deployWorker(
     name: string,
@@ -81,30 +100,36 @@ export class CloudflareApiService {
 
     if (bindings.d1) {
       bindings.d1.forEach(name => {
+        // Use configured ID if available, otherwise use the binding name as fallback
+        const databaseId = this.bindingConfig.d1?.[name] || name;
         result.push({
           type: 'd1_database',
           name,
-          database_id: name, // This should be the actual D1 database ID
+          database_id: databaseId,
         });
       });
     }
 
     if (bindings.kv) {
       bindings.kv.forEach(name => {
+        // Use configured ID if available, otherwise use the binding name as fallback
+        const namespaceId = this.bindingConfig.kv?.[name] || name;
         result.push({
           type: 'kv_namespace',
           name,
-          namespace_id: name, // This should be the actual KV namespace ID
+          namespace_id: namespaceId,
         });
       });
     }
 
     if (bindings.r2) {
       bindings.r2.forEach(name => {
+        // Use configured bucket name if available, otherwise use binding name
+        const bucketName = this.bindingConfig.r2?.[name] || name;
         result.push({
           type: 'r2_bucket',
           name,
-          bucket_name: name,
+          bucket_name: bucketName,
         });
       });
     }

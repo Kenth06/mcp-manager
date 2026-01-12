@@ -1,21 +1,95 @@
 'use client';
 
-import { useParams } from 'next/navigation';
+import { useState } from 'react';
+import { useParams, useRouter } from 'next/navigation';
 import { useMcpById } from '@/lib/hooks/useMcp';
-import { useVersions } from '@/lib/hooks/useVersions';
+import { useVersions, useRollback } from '@/lib/hooks/useVersions';
 import { useTools } from '@/lib/hooks/useTools';
-import { Card, Badge, Button, Loader, DetailsList, DateDisplay } from '@/components/ui';
+import { usePublish } from '@/lib/hooks/usePublish';
+import { Card, Badge, Button, Loader, DetailsList, DateDisplay, Alert, ConfirmModal } from '@/components/ui';
 import { PageHeader } from '@/components/common';
 import { ToolsList } from '@/components/tools/ToolsList';
+import { api } from '@/lib/api';
 import Link from 'next/link';
+import { Trash2, RotateCcw } from 'lucide-react';
+import { toast } from '@/stores';
 
 export default function McpDetailPage() {
   const params = useParams();
+  const router = useRouter();
   const mcpId = params.id as string;
-  
-  const { mcp, loading: mcpLoading, error: mcpError } = useMcpById(mcpId);
-  const { versions, loading: versionsLoading } = useVersions(mcpId);
-  const { tools, loading: toolsLoading, updateTools, version: toolsVersion } = useTools(mcpId);
+
+  const [publishingVersion, setPublishingVersion] = useState<string | null>(null);
+  const [publishError, setPublishError] = useState<string | null>(null);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [rollbackVersion, setRollbackVersion] = useState<string | null>(null);
+  const [showRollbackModal, setShowRollbackModal] = useState(false);
+
+  const { mcp, loading: mcpLoading, error: mcpError, refetch: refetchMcp } = useMcpById(mcpId);
+  const { versions, loading: versionsLoading, refetch: refetchVersions } = useVersions(mcpId);
+  const { tools, loading: toolsLoading, updateTools } = useTools(mcpId);
+
+  const { publish, loading: publishLoading } = usePublish({
+    onSuccess: (response) => {
+      router.push(`/deployments/${response.deploymentId}`);
+    },
+    onError: (error) => {
+      setPublishError(error.message);
+      setPublishingVersion(null);
+    },
+  });
+
+  const { rollback, loading: rollbackLoading } = useRollback({
+    onSuccess: (version) => {
+      toast.success('Rollback Successful', `Rolled back to version ${version}`);
+      setShowRollbackModal(false);
+      setRollbackVersion(null);
+      refetchVersions();
+      refetchMcp();
+    },
+    onError: (error) => {
+      toast.error('Rollback Failed', error.message);
+      setShowRollbackModal(false);
+      setRollbackVersion(null);
+    },
+  });
+
+  const handlePublish = async (version: string) => {
+    setPublishingVersion(version);
+    setPublishError(null);
+    try {
+      await publish(mcpId, version);
+    } catch {
+      // Error handled in onError callback
+    }
+  };
+
+  const handleDelete = async () => {
+    setDeleteLoading(true);
+    try {
+      await api.delete(`/api/mcp/${mcpId}`);
+      router.push('/mcp');
+    } catch (err) {
+      setPublishError(err instanceof Error ? err.message : 'Failed to delete MCP');
+      setShowDeleteModal(false);
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
+
+  const handleRollbackClick = (version: string) => {
+    setRollbackVersion(version);
+    setShowRollbackModal(true);
+  };
+
+  const handleRollbackConfirm = async () => {
+    if (!rollbackVersion) return;
+    await rollback(mcpId, rollbackVersion);
+  };
+
+  // Check if there's an active version (needed to show rollback button)
+  const hasActiveVersion = versions.some(v => v.is_active);
 
   if (mcpLoading) {
     return (
@@ -50,7 +124,25 @@ export default function McpDetailPage() {
         <PageHeader
           title={mcp.name}
           description={mcp.description || 'Model Context Protocol Server'}
+          primaryAction={{
+            label: 'Edit MCP',
+            onClick: () => router.push(`/mcp/${mcpId}/edit`),
+          }}
         />
+
+        {publishError && (
+          <Alert
+            variant="error"
+            title="Error"
+            className="mb-6"
+            action={{
+              label: 'Dismiss',
+              onClick: () => setPublishError(null),
+            }}
+          >
+            {publishError}
+          </Alert>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-6">
           <div className="lg:col-span-3">
@@ -60,8 +152,8 @@ export default function McpDetailPage() {
               loading={toolsLoading}
             />
           </div>
-          
-          <div className="lg:col-span-1">
+
+          <div className="lg:col-span-1 space-y-4">
             <Card className="ring ring-gray-950/10 shadow-xs border border-gray-200">
               <div className="p-4 border-b border-gray-200 bg-gray-50 rounded-t-lg">
                 <h2 className="text-sm font-semibold text-gray-900">Quick Stats</h2>
@@ -81,6 +173,28 @@ export default function McpDetailPage() {
                     {mcp.auth_type}
                   </Badge>
                 </div>
+                <div>
+                  <p className="text-xs text-gray-600 mb-1">Total Versions</p>
+                  <p className="text-sm font-medium text-gray-900">{versions.length}</p>
+                </div>
+              </div>
+            </Card>
+
+            <Card className="ring ring-red-200 shadow-xs border border-red-200">
+              <div className="p-4">
+                <h3 className="text-sm font-semibold text-red-700 mb-2">Danger Zone</h3>
+                <p className="text-xs text-gray-600 mb-3">
+                  Permanently delete this MCP and all associated data.
+                </p>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  onClick={() => setShowDeleteModal(true)}
+                  className="w-full"
+                >
+                  <Trash2 className="w-4 h-4 mr-1.5" />
+                  Delete MCP
+                </Button>
               </div>
             </Card>
           </div>
@@ -89,8 +203,16 @@ export default function McpDetailPage() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
           <div className="lg:col-span-2">
             <Card className="ring ring-gray-950/10 shadow-xs border border-gray-200">
-              <div className="p-4 border-b border-gray-200 bg-gray-50 rounded-t-lg">
+              <div className="p-4 border-b border-gray-200 bg-gray-50 rounded-t-lg flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-gray-900">Versions</h2>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => refetchVersions()}
+                  disabled={versionsLoading}
+                >
+                  Refresh
+                </Button>
               </div>
               <div className="p-4">
                 {versionsLoading ? (
@@ -100,7 +222,7 @@ export default function McpDetailPage() {
                 ) : versions.length === 0 ? (
                   <div className="text-center py-8 text-gray-500">
                     <p className="text-sm">No versions yet</p>
-                    <p className="text-xs mt-1 text-gray-400">Create a version to get started</p>
+                    <p className="text-xs mt-1 text-gray-400">Add tools to create your first version</p>
                   </div>
                 ) : (
                   <div className="space-y-2">
@@ -115,6 +237,18 @@ export default function McpDetailPage() {
                             {version.is_active && (
                               <Badge variant="success" className="text-xs">Active</Badge>
                             )}
+                            {version.last_deploy_status && (
+                              <Badge
+                                variant={
+                                  version.last_deploy_status === 'completed' ? 'success' :
+                                  version.last_deploy_status === 'failed' ? 'error' :
+                                  'warning'
+                                }
+                                className="text-xs"
+                              >
+                                {version.last_deploy_status}
+                              </Badge>
+                            )}
                           </div>
                           {version.changelog && (
                             <p className="text-xs text-gray-600 line-clamp-1">{version.changelog}</p>
@@ -127,15 +261,29 @@ export default function McpDetailPage() {
                         </div>
                         <div className="flex gap-2 ml-4">
                           {!version.is_active && (
-                            <Button
-                              variant="primary"
-                              size="sm"
-                              onClick={async () => {
-                                alert('Publish functionality coming soon');
-                              }}
-                            >
-                              Publish
-                            </Button>
+                            <>
+                              <Button
+                                variant="primary"
+                                size="sm"
+                                onClick={() => handlePublish(version.version)}
+                                disabled={publishLoading && publishingVersion === version.version}
+                              >
+                                {publishLoading && publishingVersion === version.version
+                                  ? 'Publishing...'
+                                  : 'Publish'}
+                              </Button>
+                              {hasActiveVersion && version.last_deploy_status === 'completed' && (
+                                <Button
+                                  variant="secondary"
+                                  size="sm"
+                                  onClick={() => handleRollbackClick(version.version)}
+                                  disabled={rollbackLoading}
+                                  title="Rollback to this version"
+                                >
+                                  <RotateCcw className="w-3.5 h-3.5" />
+                                </Button>
+                              )}
+                            </>
                           )}
                         </div>
                       </div>
@@ -169,6 +317,21 @@ export default function McpDetailPage() {
                       value: mcp.worker_name || 'Not deployed',
                     },
                     {
+                      label: 'Endpoint',
+                      value: mcp.endpoint_url ? (
+                        <a
+                          href={mcp.endpoint_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[#056DFF] hover:underline text-xs break-all"
+                        >
+                          {mcp.endpoint_url}
+                        </a>
+                      ) : (
+                        'Not deployed'
+                      ),
+                    },
+                    {
                       label: 'Created',
                       value: <DateDisplay date={mcp.created_at * 1000} />,
                     },
@@ -183,7 +346,33 @@ export default function McpDetailPage() {
           </div>
         </div>
       </div>
+
+      <ConfirmModal
+        isOpen={showDeleteModal}
+        onClose={() => setShowDeleteModal(false)}
+        onConfirm={handleDelete}
+        title="Delete MCP"
+        message={`Are you sure you want to delete "${mcp.name}"? This action cannot be undone. All versions, deployments, and associated data will be permanently removed.`}
+        confirmLabel="Delete MCP"
+        cancelLabel="Cancel"
+        variant="danger"
+        loading={deleteLoading}
+      />
+
+      <ConfirmModal
+        isOpen={showRollbackModal}
+        onClose={() => {
+          setShowRollbackModal(false);
+          setRollbackVersion(null);
+        }}
+        onConfirm={handleRollbackConfirm}
+        title="Rollback Version"
+        message={`Are you sure you want to rollback to version "${rollbackVersion}"? This will redeploy the worker with this version's configuration.`}
+        confirmLabel="Rollback"
+        cancelLabel="Cancel"
+        variant="warning"
+        loading={rollbackLoading}
+      />
     </div>
   );
 }
-

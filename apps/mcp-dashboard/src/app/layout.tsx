@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import './globals.css';
 import { AppHeader } from '@/components/AppHeader';
+import { Providers } from '@/components/Providers';
 
 export const metadata: Metadata = {
   title: 'MCP Control Plane',
@@ -15,8 +16,10 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="bg-white min-h-screen">
-        <AppHeader />
-        <main className="bg-white min-h-screen">{children}</main>
+        <Providers>
+          <AppHeader />
+          <main className="bg-white min-h-screen">{children}</main>
+        </Providers>
       </body>
     </html>
   );

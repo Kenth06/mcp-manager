@@ -3,8 +3,8 @@
 import React, { useState } from 'react';
 import { Card, Button, Badge } from '@/components/ui';
 import { SectionHeader } from '@/components/common';
-import { Plus, Edit2, Trash2, Code, ChevronRight } from 'lucide-react';
-import { ToolEditor } from './ToolEditor';
+import { Plus, Edit2, Trash2, Code, ChevronRight, Wand2 } from 'lucide-react';
+import { VisualToolEditor } from '@/components/tool-builder';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export interface Tool {
@@ -23,6 +23,7 @@ interface ToolsListProps {
 export function ToolsList({ tools, onUpdate, loading }: ToolsListProps) {
   const [editingTool, setEditingTool] = useState<Tool | null>(null);
   const [isAdding, setIsAdding] = useState(false);
+  const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
 
   const handleSave = async (tool: Tool) => {
     let updatedTools: Tool[];
@@ -67,15 +68,13 @@ export function ToolsList({ tools, onUpdate, loading }: ToolsListProps) {
 
   if (editingTool || isAdding) {
     return (
-      <ToolEditor
+      <VisualToolEditor
         tool={editingTool || undefined}
         onSave={handleSave}
         onCancel={handleCancel}
       />
     );
   }
-
-  const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
 
   const toggleExpand = (toolName: string) => {
     const newExpanded = new Set(expandedTools);
@@ -99,7 +98,7 @@ export function ToolsList({ tools, onUpdate, loading }: ToolsListProps) {
               onClick: handleAdd,
               variant: 'primary',
               size: 'sm',
-              icon: <Plus className="w-4 h-4" />,
+              icon: <Wand2 className="w-4 h-4" />,
               disabled: loading,
             },
           ]}
@@ -109,9 +108,11 @@ export function ToolsList({ tools, onUpdate, loading }: ToolsListProps) {
       <div className="p-4">
         {tools.length === 0 ? (
           <div className="text-center py-12 text-gray-500">
-            <Code className="w-16 h-16 mx-auto mb-3 opacity-30" />
-            <p className="text-sm font-medium">No tools defined</p>
-            <p className="text-xs mt-1 text-gray-400">Add your first tool to get started</p>
+            <div className="w-16 h-16 mx-auto mb-3 rounded-full bg-gradient-to-br from-blue-100 to-purple-100 flex items-center justify-center">
+              <Wand2 className="w-8 h-8 text-blue-600" />
+            </div>
+            <p className="text-sm font-medium text-gray-900">No tools defined</p>
+            <p className="text-xs mt-1 text-gray-400">Create your first tool visually - no code required</p>
             <Button
               variant="primary"
               size="sm"
@@ -119,8 +120,8 @@ export function ToolsList({ tools, onUpdate, loading }: ToolsListProps) {
               className="mt-4"
               disabled={loading}
             >
-              <Plus className="w-4 h-4 mr-1.5" />
-              Add Tool
+              <Wand2 className="w-4 h-4 mr-1.5" />
+              Create Tool
             </Button>
           </div>
         ) : (

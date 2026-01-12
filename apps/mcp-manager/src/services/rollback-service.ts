@@ -10,7 +10,7 @@ export class RollbackService {
   ) {}
 
   async rollback(mcpId: string, targetVersion: string): Promise<void> {
-    // 1. Obtener la versión objetivo
+    // 1. Get target version
     const targetVersionRecord = await this.db.prepare(`
       SELECT * FROM mcp_versions WHERE mcp_id = ? AND version = ?
     `).bind(mcpId, targetVersion).first();
@@ -19,19 +19,19 @@ export class RollbackService {
       throw new Error(`Target version ${targetVersion} not found for MCP ${mcpId}`);
     }
 
-    // 2. Desactivar la versión actual
+    // 2. Deactivate current version
     await this.db.prepare(`
       UPDATE mcp_versions SET is_active = FALSE WHERE mcp_id = ? AND is_active = TRUE
     `).bind(mcpId).run();
 
-    // 3. Activar la versión objetivo
+    // 3. Activate target version
     await this.db.prepare(`
       UPDATE mcp_versions SET is_active = TRUE, deployed_at = ? WHERE id = ?
     `).bind(Date.now(), targetVersionRecord.id).run();
 
-    // 4. Regenerar y desplegar el worker con la versión objetivo
+    // 4. Get MCP with auth config
     const mcp = await this.db.prepare(`
-      SELECT ms.*, mac.auth_type as auth_config_type
+      SELECT ms.*, mac.auth_type as auth_config_type, mac.api_key_hash
       FROM mcp_servers ms
       LEFT JOIN mcp_auth_configs mac ON ms.id = mac.mcp_id
       WHERE ms.id = ?
@@ -51,7 +51,7 @@ export class RollbackService {
       tools: Array<{
         name: string;
         description: string;
-        inputSchema: Record<string, any>;
+        inputSchema: Record<string, unknown>;
         handler: string;
       }>;
       bindings?: {
@@ -72,22 +72,31 @@ export class RollbackService {
       authType,
     });
 
+    // Build secrets based on auth type
+    const secrets: Record<string, string> = {};
+
+    if (authType === 'api_key' && mcp.api_key_hash) {
+      // Store the API key hash for validation in the worker
+      // Note: The worker will compare hashes, not raw keys
+      secrets.MCP_API_KEY_HASH = mcp.api_key_hash as string;
+    }
+
     const workerName = `mcp-${mcpId}-v${targetVersion.replace(/\./g, '-')}`;
     await this.cloudflareApi.deployWorker(
       workerName,
       workerScript,
       configSnapshot.bindings || {},
-      { MCP_API_KEY: 'your_api_key_here' } // TODO: Get actual API key from auth config
+      secrets
     );
 
-    // 5. Actualizar el registro del MCP para reflejar la nueva versión activa
+    // 5. Update MCP record with new active version
     await this.db.prepare(`
       UPDATE mcp_servers
       SET current_version = ?, worker_name = ?, updated_at = ?
       WHERE id = ?
     `).bind(targetVersion, workerName, Date.now(), mcpId).run();
 
-    // Registrar deployment
+    // Record deployment
     const deploymentId = crypto.randomUUID();
     await this.db.prepare(`
       INSERT INTO deployments (id, mcp_id, version_id, operation_type, status, worker_name, started_at, completed_at)
@@ -95,4 +104,3 @@ export class RollbackService {
     `).bind(deploymentId, mcpId, targetVersionRecord.id, workerName, Date.now(), Date.now()).run();
   }
 }
-
