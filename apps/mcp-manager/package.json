@@ -14,6 +14,7 @@
   "dependencies": {
     "hono": "^4.0.0",
     "@hono/zod-validator": "^0.2.1",
+    "drizzle-orm": "^0.36.2",
     "zod": "^3.22.4",
     "effect": "^3.0.0",
     "@iarna/toml": "^2.2.5"
@@ -26,4 +27,3 @@
     "wrangler": "^3.19.0"
   }
 }
-

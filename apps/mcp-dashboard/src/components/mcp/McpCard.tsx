@@ -64,7 +64,7 @@ export function McpCard({
           {lastDeployed && (
             <div className="col-span-2 mt-2">
               <p className="text-xs text-gray-500 mb-0.5">Last Deployed</p>
-              <DateDisplay date={lastDeployed * 1000} />
+              <DateDisplay date={lastDeployed} />
             </div>
           )}
         </div>
@@ -72,4 +72,3 @@ export function McpCard({
     </Link>
   );
 }
-

@@ -546,7 +546,7 @@ function parseJsonSchemaToParameters(schema: Record<string, any>): Parameter[] {
   return parameters;
 }
 
-// Helper: Generate handler code from actions
+// Helper: Generate handler body from actions (wrapped by the worker generator)
 function generateHandlerCode(actions: ActionBlock[]): string {
   if (actions.length === 0) {
     return '// Add actions to generate code';
@@ -554,24 +554,21 @@ function generateHandlerCode(actions: ActionBlock[]): string {
 
   const lines: string[] = [
     '// Auto-generated handler code',
-    'async function handler(params, env) {',
-    '  const results = {};',
+    'const results = {};',
     '',
   ];
 
   for (const action of actions) {
-    lines.push(`  // ${action.label}`);
+    lines.push(`// ${action.label}`);
     lines.push(...generateActionCode(action));
     lines.push('');
   }
-
-  lines.push('}');
 
   return lines.join('\n');
 }
 
 function generateActionCode(action: ActionBlock): string[] {
-  const indent = '  ';
+  const indent = '';
 
   switch (action.type) {
     case 'http-request': {

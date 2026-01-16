@@ -18,6 +18,8 @@ interface FormData {
   oauthProvider: string;
   oauthClientId: string;
   oauthClientSecret: string;
+  oauthIntrospectionUrl: string;
+  oauthScopes: string;
   bindings: Bindings;
 }
 
@@ -29,6 +31,7 @@ interface FormErrors {
   oauthProvider?: string;
   oauthClientId?: string;
   oauthClientSecret?: string;
+  oauthIntrospectionUrl?: string;
 }
 
 export default function CreateMcpPage() {
@@ -43,6 +46,8 @@ export default function CreateMcpPage() {
     oauthProvider: '',
     oauthClientId: '',
     oauthClientSecret: '',
+    oauthIntrospectionUrl: '',
+    oauthScopes: '',
     bindings: {},
   });
   const [errors, setErrors] = useState<FormErrors>({});
@@ -72,6 +77,9 @@ export default function CreateMcpPage() {
       }
       if (!formData.oauthClientSecret) {
         newErrors.oauthClientSecret = 'OAuth Client Secret is required';
+      }
+      if (!formData.oauthIntrospectionUrl) {
+        newErrors.oauthIntrospectionUrl = 'OAuth Introspection URL is required';
       }
     }
 
@@ -107,10 +115,16 @@ export default function CreateMcpPage() {
           apiKey: formData.apiKey,
         };
       } else if (formData.authType === 'oauth') {
+        const scopes = formData.oauthScopes
+          .split(',')
+          .map((scope) => scope.trim())
+          .filter(Boolean);
         payload.authConfig = {
           oauthProvider: formData.oauthProvider || undefined,
           oauthClientId: formData.oauthClientId,
           oauthClientSecret: formData.oauthClientSecret,
+          oauthIntrospectionUrl: formData.oauthIntrospectionUrl || undefined,
+          scopes: scopes.length > 0 ? scopes : undefined,
         };
       }
 
@@ -238,6 +252,22 @@ export default function CreateMcpPage() {
                     hint="Will be stored securely"
                     disabled={loading}
                     required
+                  />
+                  <Input
+                    label="Introspection URL"
+                    placeholder="https://provider.com/oauth/introspect"
+                    value={formData.oauthIntrospectionUrl}
+                    onChange={(e) => handleChange('oauthIntrospectionUrl', e.target.value)}
+                    error={errors.oauthIntrospectionUrl}
+                    disabled={loading}
+                    required
+                  />
+                  <Input
+                    label="Scopes (comma-separated)"
+                    placeholder="read:tools, write:tools"
+                    value={formData.oauthScopes}
+                    onChange={(e) => handleChange('oauthScopes', e.target.value)}
+                    disabled={loading}
                   />
                 </div>
               )}

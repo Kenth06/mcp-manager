@@ -114,6 +114,25 @@ export default function McpDetailPage() {
     );
   }
 
+  const bindingCounts = [
+    { label: 'D1', count: Array.isArray(mcp.bindings?.d1) ? mcp.bindings?.d1.length : 0 },
+    { label: 'KV', count: Array.isArray(mcp.bindings?.kv) ? mcp.bindings?.kv.length : 0 },
+    { label: 'R2', count: Array.isArray(mcp.bindings?.r2) ? mcp.bindings?.r2.length : 0 },
+    { label: 'Secrets', count: Array.isArray(mcp.bindings?.secrets) ? mcp.bindings?.secrets.length : 0 },
+  ].filter((entry) => entry.count > 0);
+
+  const bindingsValue = bindingCounts.length === 0
+    ? 'None'
+    : (
+      <div className="flex flex-wrap gap-1">
+        {bindingCounts.map((binding) => (
+          <Badge key={binding.label} variant="info" className="text-xs">
+            {binding.label}: {binding.count}
+          </Badge>
+        ))}
+      </div>
+    );
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-orange-50 via-white to-orange-50/30 relative">
       <div className="relative z-10 w-full px-6 py-8">
@@ -255,7 +274,7 @@ export default function McpDetailPage() {
                           )}
                           {version.deployed_at && (
                             <p className="text-xs text-gray-500 mt-1">
-                              Deployed: <DateDisplay date={version.deployed_at * 1000} />
+                              Deployed: <DateDisplay date={version.deployed_at} />
                             </p>
                           )}
                         </div>
@@ -333,11 +352,15 @@ export default function McpDetailPage() {
                     },
                     {
                       label: 'Created',
-                      value: <DateDisplay date={mcp.created_at * 1000} />,
+                      value: <DateDisplay date={mcp.created_at} />,
                     },
                     {
                       label: 'Updated',
-                      value: <DateDisplay date={mcp.updated_at * 1000} />,
+                      value: <DateDisplay date={mcp.updated_at} />,
+                    },
+                    {
+                      label: 'Bindings',
+                      value: bindingsValue,
                     },
                   ]}
                 />

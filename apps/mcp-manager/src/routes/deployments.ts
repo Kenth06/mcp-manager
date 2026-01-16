@@ -1,6 +1,9 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
+import { count, desc, eq } from 'drizzle-orm';
 import { DeploymentIdParamSchema } from '../schemas/mcp.schema';
+import { createDb } from '../db';
+import { deployments, mcpServers, mcpVersions } from '../db/schema';
 
 type Bindings = {
   DB: D1Database;
@@ -16,44 +19,57 @@ export const deploymentRoutes = new Hono<{ Bindings: Bindings }>();
 
 // Listar deployments
 deploymentRoutes.get('/', async (c: any) => {
+  const db = createDb(c.env.DB);
   const page = parseInt(c.req.query('page') || '1');
   const limit = parseInt(c.req.query('limit') || '20');
   const offset = (page - 1) * limit;
   const mcpId = c.req.query('mcpId');
 
-  let query = `
-    SELECT d.*, ms.name as mcp_name, mv.version
-    FROM deployments d
-    JOIN mcp_servers ms ON d.mcp_id = ms.id
-    JOIN mcp_versions mv ON d.version_id = mv.id
-    WHERE 1=1
-  `;
-  const params: any[] = [];
+  let query = db
+    .select({
+      id: deployments.id,
+      mcp_id: deployments.mcpId,
+      version_id: deployments.versionId,
+      operation_type: deployments.operationType,
+      status: deployments.status,
+      worker_name: deployments.workerName,
+      started_at: deployments.startedAt,
+      completed_at: deployments.completedAt,
+      error_message: deployments.errorMessage,
+      mcp_name: mcpServers.name,
+      version: mcpVersions.version,
+    })
+    .from(deployments)
+    .innerJoin(mcpServers, eq(deployments.mcpId, mcpServers.id))
+    .innerJoin(mcpVersions, eq(deployments.versionId, mcpVersions.id));
 
   if (mcpId) {
-    query += ' AND d.mcp_id = ?';
-    params.push(mcpId);
+    query = query.where(eq(deployments.mcpId, mcpId));
   }
 
-  query += ' ORDER BY d.started_at DESC LIMIT ? OFFSET ?';
-  params.push(limit, offset);
+  const results = await query
+    .orderBy(desc(deployments.startedAt))
+    .limit(limit)
+    .offset(offset);
 
-  const { results } = await c.env.DB.prepare(query).bind(...params).all();
+  let countQuery = db
+    .select({ count: count() })
+    .from(deployments);
 
-  const countQuery = mcpId
-    ? 'SELECT COUNT(*) as count FROM deployments WHERE mcp_id = ?'
-    : 'SELECT COUNT(*) as count FROM deployments';
-  
-  const countParams = mcpId ? [mcpId] : [];
-  const { count } = await c.env.DB.prepare(countQuery).bind(...countParams).first() as { count: number };
+  if (mcpId) {
+    countQuery = countQuery.where(eq(deployments.mcpId, mcpId));
+  }
+
+  const countRows = await countQuery;
+  const total = Number(countRows[0]?.count ?? 0);
 
   return c.json({
     data: results,
     pagination: {
       page,
       limit,
-      total: count,
-      pages: Math.ceil(count / limit),
+      total,
+      pages: Math.ceil(total / limit),
     },
   });
 });
@@ -63,15 +79,30 @@ deploymentRoutes.get(
   '/:id',
   zValidator('param', DeploymentIdParamSchema),
   async (c: any) => {
+    const db = createDb(c.env.DB);
     const { id } = c.req.valid('param');
     
-    const deployment = await c.env.DB.prepare(`
-      SELECT d.*, ms.name as mcp_name, mv.version, mv.bundle_key
-      FROM deployments d
-      JOIN mcp_servers ms ON d.mcp_id = ms.id
-      JOIN mcp_versions mv ON d.version_id = mv.id
-      WHERE d.id = ?
-    `).bind(id).first();
+    const rows = await db
+      .select({
+        id: deployments.id,
+        mcp_id: deployments.mcpId,
+        version_id: deployments.versionId,
+        operation_type: deployments.operationType,
+        status: deployments.status,
+        worker_name: deployments.workerName,
+        started_at: deployments.startedAt,
+        completed_at: deployments.completedAt,
+        error_message: deployments.errorMessage,
+        mcp_name: mcpServers.name,
+        version: mcpVersions.version,
+        bundle_key: mcpVersions.bundleKey,
+      })
+      .from(deployments)
+      .innerJoin(mcpServers, eq(deployments.mcpId, mcpServers.id))
+      .innerJoin(mcpVersions, eq(deployments.versionId, mcpVersions.id))
+      .where(eq(deployments.id, id))
+      .limit(1);
+    const deployment = rows[0];
 
     if (!deployment) {
       return c.json({ error: 'Deployment not found' }, 404);
@@ -135,4 +166,3 @@ deploymentRoutes.get(
     return deploymentDOInstance.fetch(request);
   }
 );
-

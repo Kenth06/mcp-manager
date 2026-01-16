@@ -3,11 +3,15 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../api';
 
-// API bindings format (simple string arrays)
+type ApiD1Binding = string | { name: string; databaseId?: string };
+type ApiKvBinding = string | { name: string; namespaceId?: string };
+type ApiR2Binding = string | { name: string; bucketName?: string };
+
+// API bindings format (strings or objects with IDs)
 export interface ApiBindings {
-  d1?: string[];
-  kv?: string[];
-  r2?: string[];
+  d1?: ApiD1Binding[];
+  kv?: ApiKvBinding[];
+  r2?: ApiR2Binding[];
   secrets?: string[];
 }
 
@@ -22,10 +26,55 @@ export interface UiBindings {
 // Convert API format to UI format
 export function apiBindingsToUi(apiBindings?: ApiBindings): UiBindings {
   if (!apiBindings) return {};
+  const normalizeD1 = (items?: ApiBindings['d1']) => {
+    if (!items) return undefined;
+    return items
+      .map((item) => {
+        if (typeof item === 'string') {
+          return { name: item, databaseId: '' };
+        }
+        if (item && typeof item === 'object' && 'name' in item) {
+          const value = (item as Record<string, string>).databaseId;
+          return { name: String(item.name), databaseId: value ? String(value) : '' };
+        }
+        return null;
+      })
+      .filter(Boolean) as Array<{ name: string; databaseId: string }>;
+  };
+  const normalizeKv = (items?: ApiBindings['kv']) => {
+    if (!items) return undefined;
+    return items
+      .map((item) => {
+        if (typeof item === 'string') {
+          return { name: item, namespaceId: '' };
+        }
+        if (item && typeof item === 'object' && 'name' in item) {
+          const value = (item as Record<string, string>).namespaceId;
+          return { name: String(item.name), namespaceId: value ? String(value) : '' };
+        }
+        return null;
+      })
+      .filter(Boolean) as Array<{ name: string; namespaceId: string }>;
+  };
+  const normalizeR2 = (items?: ApiBindings['r2']) => {
+    if (!items) return undefined;
+    return items
+      .map((item) => {
+        if (typeof item === 'string') {
+          return { name: item, bucketName: '' };
+        }
+        if (item && typeof item === 'object' && 'name' in item) {
+          const value = (item as Record<string, string>).bucketName;
+          return { name: String(item.name), bucketName: value ? String(value) : '' };
+        }
+        return null;
+      })
+      .filter(Boolean) as Array<{ name: string; bucketName: string }>;
+  };
   return {
-    d1: apiBindings.d1?.map(name => ({ name, databaseId: '' })),
-    kv: apiBindings.kv?.map(name => ({ name, namespaceId: '' })),
-    r2: apiBindings.r2?.map(name => ({ name, bucketName: '' })),
+    d1: normalizeD1(apiBindings.d1),
+    kv: normalizeKv(apiBindings.kv),
+    r2: normalizeR2(apiBindings.r2),
     secrets: apiBindings.secrets,
   };
 }
@@ -36,13 +85,34 @@ export function uiBindingsToApi(uiBindings?: UiBindings): ApiBindings {
   const result: ApiBindings = {};
 
   if (uiBindings.d1?.length) {
-    result.d1 = uiBindings.d1.map(b => b.name).filter(Boolean);
+    result.d1 = uiBindings.d1
+      .map((b) => {
+        const name = b.name?.trim();
+        if (!name) return null;
+        const databaseId = b.databaseId?.trim();
+        return databaseId ? { name, databaseId } : { name };
+      })
+      .filter(Boolean) as Array<{ name: string; databaseId?: string }>;
   }
   if (uiBindings.kv?.length) {
-    result.kv = uiBindings.kv.map(b => b.name).filter(Boolean);
+    result.kv = uiBindings.kv
+      .map((b) => {
+        const name = b.name?.trim();
+        if (!name) return null;
+        const namespaceId = b.namespaceId?.trim();
+        return namespaceId ? { name, namespaceId } : { name };
+      })
+      .filter(Boolean) as Array<{ name: string; namespaceId?: string }>;
   }
   if (uiBindings.r2?.length) {
-    result.r2 = uiBindings.r2.map(b => b.name).filter(Boolean);
+    result.r2 = uiBindings.r2
+      .map((b) => {
+        const name = b.name?.trim();
+        if (!name) return null;
+        const bucketName = b.bucketName?.trim();
+        return bucketName ? { name, bucketName } : { name };
+      })
+      .filter(Boolean) as Array<{ name: string; bucketName?: string }>;
   }
   if (uiBindings.secrets?.length) {
     result.secrets = uiBindings.secrets.filter(Boolean);
@@ -56,6 +126,13 @@ interface Mcp {
   name: string;
   description?: string;
   auth_type: 'public' | 'api_key' | 'oauth';
+  auth_config_type?: 'public' | 'api_key' | 'oauth';
+  oauth_provider?: string | null;
+  oauth_client_id?: string | null;
+  oauth_introspection_url?: string | null;
+  oauth_scopes?: string[] | null;
+  has_api_key?: boolean;
+  has_oauth_secret?: boolean;
   current_version?: string;
   version_count?: number;
   last_deployed?: number;

@@ -14,6 +14,12 @@ interface FormData {
   name: string;
   description: string;
   authType: 'public' | 'api_key' | 'oauth';
+  apiKey: string;
+  oauthProvider: string;
+  oauthClientId: string;
+  oauthClientSecret: string;
+  oauthIntrospectionUrl: string;
+  oauthScopes: string;
   bindings: Bindings;
 }
 
@@ -21,6 +27,10 @@ interface FormErrors {
   name?: string;
   description?: string;
   authType?: string;
+  apiKey?: string;
+  oauthClientId?: string;
+  oauthClientSecret?: string;
+  oauthIntrospectionUrl?: string;
 }
 
 export default function EditMcpPage() {
@@ -36,6 +46,12 @@ export default function EditMcpPage() {
     name: '',
     description: '',
     authType: 'public',
+    apiKey: '',
+    oauthProvider: '',
+    oauthClientId: '',
+    oauthClientSecret: '',
+    oauthIntrospectionUrl: '',
+    oauthScopes: '',
     bindings: {},
   });
   const [errors, setErrors] = useState<FormErrors>({});
@@ -48,6 +64,12 @@ export default function EditMcpPage() {
         name: mcp.name,
         description: mcp.description || '',
         authType: mcp.auth_type,
+        apiKey: '',
+        oauthProvider: mcp.oauth_provider || '',
+        oauthClientId: mcp.oauth_client_id || '',
+        oauthClientSecret: '',
+        oauthIntrospectionUrl: mcp.oauth_introspection_url || '',
+        oauthScopes: Array.isArray(mcp.oauth_scopes) ? mcp.oauth_scopes.join(', ') : '',
         bindings: apiBindingsToUi(mcp.bindings),
       });
     }
@@ -64,6 +86,22 @@ export default function EditMcpPage() {
       newErrors.name = 'Name must be less than 50 characters';
     } else if (!/^[a-z0-9-]+$/.test(formData.name)) {
       newErrors.name = 'Name can only contain lowercase letters, numbers, and hyphens';
+    }
+
+    if (formData.authType === 'api_key' && !formData.apiKey && !mcp?.has_api_key) {
+      newErrors.apiKey = 'API key is required when enabling API key auth';
+    }
+
+    if (formData.authType === 'oauth') {
+      if (!formData.oauthClientId && !mcp?.oauth_client_id) {
+        newErrors.oauthClientId = 'OAuth Client ID is required';
+      }
+      if (!formData.oauthClientSecret && !mcp?.has_oauth_secret) {
+        newErrors.oauthClientSecret = 'OAuth Client Secret is required';
+      }
+      if (!formData.oauthIntrospectionUrl && !mcp?.oauth_introspection_url) {
+        newErrors.oauthIntrospectionUrl = 'OAuth Introspection URL is required';
+      }
     }
 
     setErrors(newErrors);
@@ -95,12 +133,33 @@ export default function EditMcpPage() {
         payload.authType = formData.authType;
       }
 
+      if (formData.authType === 'api_key' && formData.apiKey) {
+        payload.authConfig = {
+          apiKey: formData.apiKey,
+        };
+      }
+
+      if (formData.authType === 'oauth') {
+        const scopes = formData.oauthScopes
+          .split(',')
+          .map((scope) => scope.trim())
+          .filter(Boolean);
+        payload.authConfig = {
+          oauthProvider: formData.oauthProvider || undefined,
+          oauthClientId: formData.oauthClientId || undefined,
+          oauthClientSecret: formData.oauthClientSecret || undefined,
+          oauthIntrospectionUrl: formData.oauthIntrospectionUrl || undefined,
+          scopes: scopes.length > 0 ? scopes : undefined,
+        };
+      }
+
       // Convert bindings to the format expected by the API
       const bindingsPayload = uiBindingsToApi(formData.bindings);
+      const existingBindings = uiBindingsToApi(apiBindingsToUi(mcp?.bindings));
 
       // Check if bindings have changed
-      const bindingsChanged = JSON.stringify(bindingsPayload) !== JSON.stringify(mcp?.bindings || {});
-      if (bindingsChanged && Object.keys(bindingsPayload).length > 0) {
+      const bindingsChanged = JSON.stringify(bindingsPayload) !== JSON.stringify(existingBindings);
+      if (bindingsChanged) {
         payload.bindings = bindingsPayload;
       }
 
@@ -213,11 +272,71 @@ export default function EditMcpPage() {
                 ]}
               />
 
+              {formData.authType === 'api_key' && (
+                <div className="pl-4 border-l-2 border-blue-200 space-y-4">
+                  <Input
+                    label="API Key"
+                    type="password"
+                    placeholder="Enter a new API key (optional)"
+                    value={formData.apiKey}
+                    onChange={(e) => handleChange('apiKey', e.target.value)}
+                    error={errors.apiKey}
+                    hint="Leave blank to keep existing key"
+                    disabled={loading}
+                  />
+                </div>
+              )}
+
               {formData.authType !== mcp.auth_type && (
                 <Alert variant="warning" title="Auth Type Change">
                   Changing the authentication type may require reconfiguring auth credentials.
                   The MCP will need to be redeployed after this change.
                 </Alert>
+              )}
+
+              {formData.authType === 'oauth' && (
+                <div className="pl-4 border-l-2 border-blue-200 space-y-4">
+                  <Input
+                    label="OAuth Provider"
+                    placeholder="e.g., github, google, auth0"
+                    value={formData.oauthProvider}
+                    onChange={(e) => handleChange('oauthProvider', e.target.value)}
+                    disabled={loading}
+                  />
+                  <Input
+                    label="Client ID"
+                    placeholder="OAuth Client ID"
+                    value={formData.oauthClientId}
+                    onChange={(e) => handleChange('oauthClientId', e.target.value)}
+                    error={errors.oauthClientId}
+                    disabled={loading}
+                  />
+                  <Input
+                    label="Client Secret"
+                    type="password"
+                    placeholder="Enter a new Client Secret (optional)"
+                    value={formData.oauthClientSecret}
+                    onChange={(e) => handleChange('oauthClientSecret', e.target.value)}
+                    error={errors.oauthClientSecret}
+                    hint="Leave blank to keep existing secret"
+                    disabled={loading}
+                  />
+                  <Input
+                    label="Introspection URL"
+                    placeholder="https://provider.com/oauth/introspect"
+                    value={formData.oauthIntrospectionUrl}
+                    onChange={(e) => handleChange('oauthIntrospectionUrl', e.target.value)}
+                    error={errors.oauthIntrospectionUrl}
+                    disabled={loading}
+                  />
+                  <Input
+                    label="Scopes (comma-separated)"
+                    placeholder="read:tools, write:tools"
+                    value={formData.oauthScopes}
+                    onChange={(e) => handleChange('oauthScopes', e.target.value)}
+                    disabled={loading}
+                  />
+                </div>
               )}
 
               <BindingsConfig

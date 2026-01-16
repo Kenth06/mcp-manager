@@ -1,9 +1,15 @@
 import { DurableObject } from 'cloudflare:workers';
 import { Hono } from 'hono';
-import { CloudflareApiService } from '../services/cloudflare-api';
+import { and, eq } from 'drizzle-orm';
+import { createDb } from '../db';
+import type { DbClient } from '../db';
+import { deployments, mcpServers, mcpVersions } from '../db/schema';
+import { CloudflareApiService, type BindingConfig } from '../services/cloudflare-api';
 import { WorkerGenerator } from '../services/worker-generator';
 import { BundleService } from '../services/bundle-service';
 import { RollbackService } from '../services/rollback-service';
+import { extractBindings } from '../lib/bindings';
+import { buildAuthSecrets } from '../lib/auth';
 
 interface McpOperation {
   id: string;
@@ -15,6 +21,7 @@ interface McpOperation {
   updatedAt: number;
   logs: OperationLog[];
   error?: string;
+  deploymentId?: string;
 }
 
 interface OperationLog {
@@ -32,11 +39,19 @@ interface McpConfig {
     handler: string;
   }>;
   bindings?: {
-    d1?: string[];
-    kv?: string[];
-    r2?: string[];
+    d1?: Array<string | { name: string; databaseId?: string }>;
+    kv?: Array<string | { name: string; namespaceId?: string }>;
+    r2?: Array<string | { name: string; bucketName?: string }>;
     secrets?: string[];
   };
+}
+
+interface OAuthConfig {
+  provider?: string | null;
+  clientId?: string | null;
+  clientSecret?: string | null;
+  introspectionUrl?: string | null;
+  scopes?: string[] | null;
 }
 
 type Env = {
@@ -44,6 +59,7 @@ type Env = {
   CF_API_TOKEN: string;
   CF_ACCOUNT_ID: string;
   DB: D1Database;
+  DEPLOYMENT_STATE: DurableObjectNamespace;
 };
 
 export class McpOperationDO extends DurableObject<Env> {
@@ -54,13 +70,15 @@ export class McpOperationDO extends DurableObject<Env> {
   private workerGenerator: WorkerGenerator;
   private bundleService: BundleService;
   private rollbackService: RollbackService;
+  private db: DbClient;
 
   constructor(state: DurableObjectState, env: Env) {
     super(state, env);
+    this.db = createDb(env.DB);
     this.cloudflareApi = new CloudflareApiService(env.CF_API_TOKEN, env.CF_ACCOUNT_ID);
     this.workerGenerator = new WorkerGenerator();
     this.bundleService = new BundleService(env.BUNDLES, env.DB);
-    this.rollbackService = new RollbackService(env.DB, this.cloudflareApi, this.workerGenerator, env.BUNDLES);
+    this.rollbackService = new RollbackService(this.db, this.cloudflareApi, this.workerGenerator, env.BUNDLES);
     this.app = this.createApp();
   }
 
@@ -80,7 +98,11 @@ export class McpOperationDO extends DurableObject<Env> {
         version: string;
         bundleKey: string;
         config: McpConfig;
+        bindingConfig?: BindingConfig;
         authType: string;
+        apiKeyHash?: string | null;
+        oauth?: OAuthConfig;
+        deploymentId?: string;
       }>();
 
       this.operation = {
@@ -92,6 +114,7 @@ export class McpOperationDO extends DurableObject<Env> {
         createdAt: Date.now(),
         updatedAt: Date.now(),
         logs: [],
+        deploymentId: body.deploymentId,
       };
 
       this.ctx.waitUntil(this.executePublish(body));
@@ -153,63 +176,90 @@ export class McpOperationDO extends DurableObject<Env> {
     version: string;
     bundleKey: string;
     config: McpConfig;
+    bindingConfig?: BindingConfig;
     authType: string;
+    apiKeyHash?: string | null;
+    oauth?: OAuthConfig;
+    deploymentId?: string;
   }): Promise<void> {
     try {
+      const { bindings, bindingConfig } = extractBindings(params.config.bindings);
+      this.cloudflareApi.setBindingConfig(params.bindingConfig ?? bindingConfig);
+
+      await this.updateDeploymentStatus(params.deploymentId, 'in_progress');
+      await this.emitProgress(params.deploymentId, 'initializing', 5, 'Initializing deployment');
       this.addLog('info', 'Fetching bundle from R2...');
+      await this.emitProgress(params.deploymentId, 'fetching_bundle', 20, 'Fetching bundle from R2');
       const bundleContent = await this.bundleService.getBundle(params.bundleKey);
       if (!bundleContent) {
         throw new Error('Bundle not found');
       }
 
       this.addLog('info', 'Preparing Worker script...');
+      await this.emitProgress(params.deploymentId, 'preparing_worker', 40, 'Preparing Worker script');
       const workerScript = this.workerGenerator.generateWorkerScript({
         name: `mcp-${params.mcpId}`,
         version: params.version,
         tools: params.config.tools,
-        bindings: params.config.bindings,
+        bindings,
         authType: params.authType as any,
       });
 
       this.addLog('info', 'Deploying to Cloudflare...');
+      await this.emitProgress(params.deploymentId, 'deploying', 70, 'Deploying to Cloudflare');
       const workerName = `mcp-${params.mcpId}-v${params.version.replace(/\./g, '-')}`;
       
+      const secrets = buildAuthSecrets(
+        params.authType as 'public' | 'api_key' | 'oauth',
+        params.apiKeyHash,
+        params.oauth
+      );
+
       await this.cloudflareApi.deployWorker(
         workerName,
         workerScript,
-        params.config.bindings || {},
-        { MCP_API_KEY: 'your_api_key_here' }
+        bindings,
+        {},
+        secrets
       );
 
       this.addLog('info', 'Updating routing...');
+      await this.emitProgress(params.deploymentId, 'updating_routing', 85, 'Updating routing');
 
       // Generate the correct endpoint URL using the Cloudflare account
       const endpointUrl = this.cloudflareApi.getWorkerEndpointUrl(workerName);
 
       this.addLog('info', 'Updating MCP server status in D1...');
-      await this.env.DB.prepare(`
-        UPDATE mcp_servers
-        SET current_version = ?, worker_name = ?, endpoint_url = ?, updated_at = ?
-        WHERE id = ?
-      `).bind(params.version, workerName, endpointUrl, Date.now(), params.mcpId).run();
+      await this.db
+        .update(mcpServers)
+        .set({
+          currentVersion: params.version,
+          workerName,
+          endpointUrl,
+          updatedAt: Date.now(),
+        })
+        .where(eq(mcpServers.id, params.mcpId));
 
-      await this.env.DB.prepare(`
-        UPDATE mcp_versions
-        SET is_active = FALSE
-        WHERE mcp_id = ? AND is_active = TRUE;
-      `).bind(params.mcpId).run();
+      await this.db
+        .update(mcpVersions)
+        .set({ isActive: 0 })
+        .where(and(eq(mcpVersions.mcpId, params.mcpId), eq(mcpVersions.isActive, 1)));
 
-      await this.env.DB.prepare(`
-        UPDATE mcp_versions
-        SET deployed_at = ?, is_active = TRUE
-        WHERE mcp_id = ? AND version = ?;
-      `).bind(Date.now(), params.mcpId, params.version).run();
+      await this.db
+        .update(mcpVersions)
+        .set({ deployedAt: Date.now(), isActive: 1 })
+        .where(and(eq(mcpVersions.mcpId, params.mcpId), eq(mcpVersions.version, params.version)));
 
+      await this.completeDeployment(params.deploymentId, 'completed', workerName);
+      await this.emitProgress(params.deploymentId, 'completed', 100, 'Deployment completed');
       this.updateStatus('completed');
       this.addLog('info', 'Deployment completed successfully');
 
     } catch (error) {
-      this.updateStatus('failed', error instanceof Error ? error.message : 'Unknown error');
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      await this.completeDeployment(params.deploymentId, 'failed', undefined, message);
+      await this.emitProgress(params.deploymentId, 'failed', 100, 'Deployment failed', { error: message });
+      this.updateStatus('failed', message);
       this.addLog('error', `Deployment failed: ${error}`);
     }
   }
@@ -245,6 +295,9 @@ export class McpOperationDO extends DurableObject<Env> {
     this.operation.updatedAt = Date.now();
     
     this.broadcast({ type: 'log', data: log });
+    if (this.operation.deploymentId) {
+      this.ctx.waitUntil(this.emitLog(this.operation.deploymentId, level, message, data));
+    }
   }
 
   private updateStatus(status: McpOperation['status'], error?: string): void {
@@ -271,5 +324,113 @@ export class McpOperationDO extends DurableObject<Env> {
   async fetch(request: Request): Promise<Response> {
     return this.app.fetch(request);
   }
-}
 
+  private async updateDeploymentStatus(
+    deploymentId: string | undefined,
+    status: 'pending' | 'in_progress' | 'completed' | 'failed',
+    error?: string
+  ): Promise<void> {
+    if (!deploymentId) {
+      return;
+    }
+
+    await this.emitStatus(deploymentId, status, error);
+  }
+
+  private async completeDeployment(
+    deploymentId: string | undefined,
+    status: 'completed' | 'failed',
+    workerName?: string,
+    errorMessage?: string
+  ): Promise<void> {
+    if (!deploymentId) {
+      return;
+    }
+
+    const updates: Record<string, unknown> = {
+      status,
+      completedAt: Date.now(),
+      errorMessage: errorMessage ?? null,
+    };
+    if (workerName) {
+      updates.workerName = workerName;
+    }
+
+    await this.db
+      .update(deployments)
+      .set(updates)
+      .where(eq(deployments.id, deploymentId));
+
+    await this.emitStatus(deploymentId, status, errorMessage);
+  }
+
+  private async emitLog(
+    deploymentId: string | undefined,
+    level: OperationLog['level'],
+    message: string,
+    data?: Record<string, unknown>
+  ): Promise<void> {
+    if (!deploymentId) {
+      return;
+    }
+
+    await this.postDeploymentEvent(deploymentId, '/log', {
+      level,
+      message,
+      data,
+    });
+  }
+
+  private async emitProgress(
+    deploymentId: string | undefined,
+    step: string,
+    progress: number,
+    message: string,
+    data?: Record<string, unknown>
+  ): Promise<void> {
+    if (!deploymentId) {
+      return;
+    }
+
+    await this.postDeploymentEvent(deploymentId, '/progress', {
+      step,
+      progress,
+      message,
+      data,
+    });
+  }
+
+  private async emitStatus(
+    deploymentId: string | undefined,
+    status: 'pending' | 'in_progress' | 'completed' | 'failed',
+    error?: string
+  ): Promise<void> {
+    if (!deploymentId) {
+      return;
+    }
+
+    await this.postDeploymentEvent(deploymentId, '/update-status', {
+      status,
+      error,
+    });
+  }
+
+  private async postDeploymentEvent(
+    deploymentId: string,
+    path: string,
+    payload: Record<string, unknown>
+  ): Promise<void> {
+    try {
+      const deploymentDO = this.env.DEPLOYMENT_STATE;
+      const doId = deploymentDO.idFromName(deploymentId);
+      const stub = deploymentDO.get(doId);
+      await stub.fetch(new Request(`http://internal${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }));
+    } catch {
+      // Best-effort telemetry; ignore failures
+    }
+  }
+}

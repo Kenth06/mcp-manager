@@ -70,5 +70,8 @@ export class BundleService {
   async listVersionBundles(mcpId: string): Promise<R2Objects> {
     return this.r2.list({ prefix: `${mcpId}/` });
   }
-}
 
+  async deleteBundle(key: string): Promise<void> {
+    await this.r2.delete(key);
+  }
+}

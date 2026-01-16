@@ -39,14 +39,15 @@ export class CloudflareApiService {
     name: string,
     script: string,
     bindings: Bindings = {},
-    vars: Record<string, string> = {}
+    vars: Record<string, string> = {},
+    secrets: Record<string, string> = {}
   ): Promise<void> {
     const url = `https://api.cloudflare.com/client/v4/accounts/${this.accountId}/workers/scripts/${name}`;
 
     const formData = new FormData();
     formData.append('metadata', JSON.stringify({
       main_module: 'index.js',
-      bindings: this.formatBindings(bindings),
+      bindings: this.formatBindings(bindings, vars),
       compatibility_date: '2024-12-01',
       compatibility_flags: ['nodejs_compat'],
     }));
@@ -67,16 +68,16 @@ export class CloudflareApiService {
       throw new Error(`Failed to deploy worker: ${response.status} ${error}`);
     }
 
-    // Set environment variables if provided
-    if (Object.keys(vars).length > 0) {
-      await this.setWorkerVars(name, vars);
+    // Set secrets if provided
+    if (Object.keys(secrets).length > 0) {
+      await this.setWorkerSecrets(name, secrets);
     }
   }
 
-  private async setWorkerVars(name: string, vars: Record<string, string>): Promise<void> {
+  private async setWorkerSecrets(name: string, secrets: Record<string, string>): Promise<void> {
     const url = `https://api.cloudflare.com/client/v4/accounts/${this.accountId}/workers/scripts/${name}/secrets`;
 
-    for (const [key, value] of Object.entries(vars)) {
+    for (const [key, value] of Object.entries(secrets)) {
       const formData = new FormData();
       formData.append('name', key);
       formData.append('text', value);
@@ -90,12 +91,12 @@ export class CloudflareApiService {
       });
 
       if (!response.ok) {
-        console.warn(`Failed to set var ${key}: ${response.status}`);
+        console.warn(`Failed to set secret ${key}: ${response.status}`);
       }
     }
   }
 
-  private formatBindings(bindings: Bindings): any[] {
+  private formatBindings(bindings: Bindings, vars: Record<string, string>): any[] {
     const result: any[] = [];
 
     if (bindings.d1) {
@@ -134,6 +135,14 @@ export class CloudflareApiService {
       });
     }
 
+    for (const [name, text] of Object.entries(vars)) {
+      result.push({
+        type: 'plain_text',
+        name,
+        text,
+      });
+    }
+
     return result;
   }
 
@@ -143,4 +152,3 @@ export class CloudflareApiService {
     console.log(`Updating route for ${workerName} to ${route}`);
   }
 }
-

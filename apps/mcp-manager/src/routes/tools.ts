@@ -1,7 +1,10 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
+import { and, desc, eq, isNull } from 'drizzle-orm';
 import { BundleService } from '../services/bundle-service';
+import { createDb } from '../db';
+import { mcpServers, mcpVersions } from '../db/schema';
 
 type Bindings = {
   DB: D1Database;
@@ -28,27 +31,32 @@ const ToolsUpdateSchema = z.object({
 
 // Obtener tools de un MCP (desde la versión activa o la última versión)
 toolsRoutes.get('/:mcpId', async (c: any) => {
+  const db = createDb(c.env.DB);
   const mcpId = c.req.param('mcpId');
 
   // Obtener la versión activa o la última versión
-  const version = await c.env.DB.prepare(`
-    SELECT config_snapshot, version, is_active
-    FROM mcp_versions
-    WHERE mcp_id = ?
-    ORDER BY is_active DESC, created_at DESC
-    LIMIT 1
-  `).bind(mcpId).first();
+  const versionRows = await db
+    .select({
+      configSnapshot: mcpVersions.configSnapshot,
+      version: mcpVersions.version,
+      isActive: mcpVersions.isActive,
+    })
+    .from(mcpVersions)
+    .where(eq(mcpVersions.mcpId, mcpId))
+    .orderBy(desc(mcpVersions.isActive), desc(mcpVersions.createdAt))
+    .limit(1);
+  const version = versionRows[0];
 
   if (!version) {
     return c.json({ tools: [] });
   }
 
   try {
-    const config = JSON.parse(version.config_snapshot as string);
+    const config = JSON.parse(version.configSnapshot as string);
     return c.json({
       tools: config.tools || [],
       version: version.version,
-      isActive: version.is_active === 1,
+      isActive: version.isActive === 1,
     });
   } catch (error) {
     return c.json({ tools: [], error: 'Failed to parse config' }, 500);
@@ -57,75 +65,111 @@ toolsRoutes.get('/:mcpId', async (c: any) => {
 
 // Actualizar tools de un MCP (crea una nueva versión)
 toolsRoutes.patch('/:mcpId', zValidator('json', ToolsUpdateSchema), async (c: any) => {
+  const db = createDb(c.env.DB);
   const mcpId = c.req.param('mcpId');
   const body = c.req.valid('json');
+  const normalizedTools = body.tools.map((tool) => ({
+    ...tool,
+    handler: normalizeHandlerBody(tool.handler),
+  }));
 
   // Obtener el MCP
-  const mcp = await c.env.DB.prepare(`
-    SELECT * FROM mcp_servers WHERE id = ? AND deleted_at IS NULL
-  `).bind(mcpId).first();
+  const mcpRows = await db
+    .select({ id: mcpServers.id, bindings: mcpServers.bindings })
+    .from(mcpServers)
+    .where(and(eq(mcpServers.id, mcpId), isNull(mcpServers.deletedAt)))
+    .limit(1);
+  const mcp = mcpRows[0];
 
   if (!mcp) {
     return c.json({ error: 'MCP not found' }, 404);
   }
 
   // Obtener la versión actual para mantener bindings y otros datos
-  const currentVersion = await c.env.DB.prepare(`
-    SELECT config_snapshot, version
-    FROM mcp_versions
-    WHERE mcp_id = ? AND is_active = 1
-    LIMIT 1
-  `).bind(mcpId).first();
+  const currentVersionRows = await db
+    .select({
+      configSnapshot: mcpVersions.configSnapshot,
+      version: mcpVersions.version,
+    })
+    .from(mcpVersions)
+    .where(and(eq(mcpVersions.mcpId, mcpId), eq(mcpVersions.isActive, 1)))
+    .limit(1);
+  const currentVersion = currentVersionRows[0];
 
   let configSnapshot: any = {};
   if (currentVersion) {
     try {
-      configSnapshot = JSON.parse(currentVersion.config_snapshot as string);
+      configSnapshot = JSON.parse(currentVersion.configSnapshot as string);
     } catch {
       configSnapshot = {};
+    }
+  } else if (mcp.bindings) {
+    try {
+      configSnapshot.bindings = JSON.parse(mcp.bindings);
+    } catch {
+      configSnapshot.bindings = {};
     }
   }
 
   // Actualizar tools en el config snapshot
-  configSnapshot.tools = body.tools;
+  configSnapshot.tools = normalizedTools;
 
   // Crear nueva versión con los tools actualizados
-  const newVersion = currentVersion?.version
-    ? incrementVersion(currentVersion.version as string)
-    : '1.0.0';
-
-  // Generate source code for the bundle
-  const sourceCode = JSON.stringify({
-    tools: body.tools,
-    bindings: configSnapshot.bindings || {},
-    version: newVersion,
-  }, null, 2);
-
-  // Create bundle in R2
   const bundleService = new BundleService(c.env.BUNDLES, c.env.DB);
-  const bundle = await bundleService.createBundle(mcpId, newVersion, sourceCode);
 
-  const versionId = crypto.randomUUID();
-  await c.env.DB.prepare(`
-    INSERT INTO mcp_versions (id, mcp_id, version, bundle_key, config_snapshot, created_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).bind(
-    versionId,
-    mcpId,
-    newVersion,
-    bundle.key,
-    JSON.stringify(configSnapshot),
-    Date.now()
-  ).run();
+  let baseVersion = currentVersion?.version;
+  let lastError: unknown;
 
-  return c.json({
-    success: true,
-    version: newVersion,
-    versionId,
-    tools: body.tools,
-    bundleKey: bundle.key,
-    bundleSize: bundle.size,
-  });
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const newVersion = baseVersion ? incrementVersion(baseVersion) : '1.0.0';
+
+    const sourceCode = JSON.stringify({
+      tools: normalizedTools,
+      bindings: configSnapshot.bindings || {},
+      version: newVersion,
+    }, null, 2);
+
+    const bundle = await bundleService.createBundle(mcpId, newVersion, sourceCode);
+    const versionId = crypto.randomUUID();
+
+    try {
+      await db.insert(mcpVersions).values({
+        id: versionId,
+        mcpId,
+        version: newVersion,
+        bundleKey: bundle.key,
+        configSnapshot: JSON.stringify(configSnapshot),
+        createdAt: Date.now(),
+      });
+
+      return c.json({
+        success: true,
+        version: newVersion,
+        versionId,
+        tools: body.tools,
+        bundleKey: bundle.key,
+        bundleSize: bundle.size,
+      });
+    } catch (error) {
+      lastError = error;
+      await bundleService.deleteBundle(bundle.key);
+
+      if (!isUniqueConflict(error)) {
+        throw error;
+      }
+
+      const latestRows = await db
+        .select({ version: mcpVersions.version })
+        .from(mcpVersions)
+        .where(eq(mcpVersions.mcpId, mcpId))
+        .orderBy(desc(mcpVersions.createdAt))
+        .limit(1);
+      baseVersion = latestRows[0]?.version;
+    }
+  }
+
+  console.error('Failed to create new version after retries', lastError);
+  return c.json({ error: 'Failed to create new version due to concurrent updates' }, 409);
 });
 
 function incrementVersion(version: string): string {
@@ -134,5 +178,46 @@ function incrementVersion(version: string): string {
   return parts.join('.');
 }
 
+function normalizeHandlerBody(handler: string): string {
+  const trimmed = handler.trim();
+  if (!trimmed) {
+    return '';
+  }
 
+  const looksLikeFunction =
+    /\bfunction\b/.test(trimmed) ||
+    /=>\s*\{/.test(trimmed);
 
+  if (!looksLikeFunction) {
+    return trimmed;
+  }
+
+  const extracted = extractFunctionBody(trimmed);
+  return extracted ?? trimmed;
+}
+
+function extractFunctionBody(source: string): string | null {
+  const braceIndex = source.indexOf('{');
+  if (braceIndex === -1) {
+    return null;
+  }
+
+  let depth = 0;
+  for (let i = braceIndex; i < source.length; i += 1) {
+    const char = source[i];
+    if (char === '{') depth += 1;
+    if (char === '}') depth -= 1;
+    if (depth === 0) {
+      return source.slice(braceIndex + 1, i).trim();
+    }
+  }
+
+  return null;
+}
+
+function isUniqueConflict(error: unknown): boolean {
+  if (error instanceof Error && typeof error.message === 'string') {
+    return error.message.includes('UNIQUE constraint failed');
+  }
+  return false;
+}
